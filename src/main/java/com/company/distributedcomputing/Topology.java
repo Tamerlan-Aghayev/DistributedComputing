@@ -1,20 +1,39 @@
 package com.company.distributedcomputing;
 
-import org.springframework.stereotype.Component;
-
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
-@Component
+import java.util.concurrent.atomic.AtomicReference;
+
 public class Topology {
-    public Map<String,Node> neighbors=new HashMap<>();
-    public String parentId;
+    private final ConcurrentHashMap<String, Node> neighbors = new ConcurrentHashMap<>();
+    private final AtomicReference<String> parentId = new AtomicReference<>();
 
+    public Map<String, Node> getNeighbors() {
+        return neighbors;
+    }
 
-    public void addNeighbor(String id, Node node){
+    public String getParentId() {
+        return parentId.get();
+    }
+
+    public void setParentId(String id) {
+        parentId.set(id);
+    }
+
+    public void addNeighbor(String id, Node node) {
         neighbors.put(id, node);
     }
 
-    public void removeNeighbor(String id){
+    public void removeNeighbor(String id) {
         neighbors.remove(id);
+    }
+
+    public Node getNeighbor(String id) {
+        return neighbors.get(id);
+    }
+
+    public void clear() {
+        neighbors.clear();
+        parentId.set(null);
     }
 }

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.rmi.RemoteException;
 import java.util.Map;
 
 @RestController
@@ -25,12 +26,17 @@ public class NodeController {
     public ResponseEntity<String> kill(){
         return ResponseEntity.ok(nodeImpl.kill());
     }
-    @PostMapping("/leave")
+    @PostMapping("/revive")
     public ResponseEntity<String> revive(){
         return ResponseEntity.ok(nodeImpl.revive());
     }
     @PostMapping("/setDelay/{delay}")
     public ResponseEntity<String> revive(@PathVariable("delay") int delay){
         return ResponseEntity.ok(nodeImpl.setDelay(delay));
+    }
+
+    @PostMapping("/startWork/{work}")
+    public void startWork(@PathVariable("work") int work) throws RemoteException {
+        nodeImpl.receiveWork(work, null, new WorkContext(nodeImpl.getMyId(), work));
     }
 }
