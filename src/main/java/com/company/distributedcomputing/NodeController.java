@@ -2,6 +2,7 @@ package com.company.distributedcomputing;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -38,5 +39,10 @@ public class NodeController {
     @PostMapping("/startWork/{work}")
     public void startWork(@PathVariable("work") int work) throws RemoteException {
         nodeImpl.receiveWork(work, null, new WorkContext(nodeImpl.getMyId(), work));
+    }
+
+    @GetMapping("/neighbors")
+    public Map<String, Node> getNeighbors() throws RemoteException {
+        return nodeImpl.getNeighbors();
     }
 }

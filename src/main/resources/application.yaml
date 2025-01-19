@@ -3,5 +3,30 @@ server:
 node:
   id: A
   rmi:
-    port: 1099
+    port: 1887
     host: localhost
+
+#server:
+#  port: 8081
+#node:
+#  id: B
+#  rmi:
+#    port: 1888
+#    host: localhost
+
+#server:
+#  port: 8082
+#node:
+#  id: C
+#  rmi:
+#    port: 1889
+#    host: localhost
+
+#server:
+#  port: 8083
+#node:
+#  id: D
+#  rmi:
+#    port: 1900
+#    host: localhost
+

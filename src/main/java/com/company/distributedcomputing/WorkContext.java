@@ -10,14 +10,14 @@ public class WorkContext implements Serializable {
     private final String rootId;
     private final int totalWork;
     private final int depth;
-    
+
     public WorkContext(String rootId, int totalWork) {
         this.contextId = UUID.randomUUID().toString();
         this.rootId = rootId;
         this.totalWork = totalWork;
         this.depth = 0;
     }
-    
+
     public WorkContext(WorkContext parent, int depth) {
         this.contextId = parent.contextId;
         this.rootId = parent.rootId;
