@@ -1,11 +1,12 @@
 package com.company.distributedcomputing;
 
+import java.rmi.NotBoundException;
 import java.rmi.Remote;
 import java.rmi.RemoteException;
 import java.util.Map;
 
 public interface NodeInterface extends Remote {
-    void receiveWork(int workAmount, String senderId, WorkContext context) throws RemoteException;
+    void receiveWork(int workAmount, String senderId, WorkContext context) throws RemoteException, NotBoundException;
     void receiveAcknowledgment(String fromId, String contextId) throws RemoteException;
     boolean checkStatus() throws RemoteException;
     Map<String, Node> getNeighbors() throws RemoteException;
@@ -20,4 +21,6 @@ public interface NodeInterface extends Remote {
     String getMyId() throws RemoteException;
     Node getMyNode() throws RemoteException;
     String getParentId() throws RemoteException;
+    int getWork() throws RemoteException;
+    void addToInvitation(String id, Node node) throws RemoteException;
 }
