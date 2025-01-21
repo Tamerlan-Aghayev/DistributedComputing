@@ -5,7 +5,7 @@ node:
   rmi:
     port: 1887
     host: localhost
-
+#
 #server:
 #  port: 8081
 #node:
@@ -13,7 +13,7 @@ node:
 #  rmi:
 #    port: 1888
 #    host: localhost
-
+####
 #server:
 #  port: 8082
 #node:
@@ -30,3 +30,11 @@ node:
 #    port: 1900
 #    host: localhost
 
+#server:
+#  port: 8084
+#node:
+#  id: E
+#  rmi:
+#    port: 1901
+#    host: localhost
+#

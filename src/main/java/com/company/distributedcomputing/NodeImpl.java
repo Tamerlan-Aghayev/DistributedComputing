@@ -24,17 +24,21 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
         super();
     }
     private final AtomicInteger work = new AtomicInteger(0);
+    private WorkContext workContext;
+    private final AtomicInteger copyOfWork=new AtomicInteger(0);
     private final AtomicBoolean isActive = new AtomicBoolean(true);
     private final AtomicInteger delay = new AtomicInteger(0);
 
     // Thread pool for handling concurrent operations
-    private final ExecutorService executorService = Executors.newCachedThreadPool();
+    private ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
 
     // Concurrent collections for tracking work and acknowledgments
     private final ConcurrentHashMap<String, Phaser> completionLatches = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Node> helperInvitations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Set<String>> pendingAcks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, WorkContext> activeContexts = new ConcurrentHashMap<>();
+    private final Map<String, NodeInterface> remoteWorkers = new ConcurrentHashMap<>();
+
 
     @Value("${node.id}")
     private String myId;
@@ -58,6 +62,8 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
             throw new RemoteException("Node " + myId + " is not active");
         }
 
+        this.workContext=context;
+        this.copyOfWork.set(workAmount);
         // Initialize work tracking for this context
         activeContexts.put(context.getContextId(), context);
         pendingAcks.put(context.getContextId(), ConcurrentHashMap.newKeySet());
@@ -69,21 +75,34 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
 
         try {
             work.set(workAmount);
+            log.info("Worker {} started distributing. Context ID: {}, Work Remaining: {}", myId, context.getContextId(), work.get());
+
+            if (work.get() <= 0) {
+                log.info("Worker {} has no work left to distribute. Sending acknowledgment for Context ID: {}", myId, context.getContextId());
+                sendAcknowledgment(context);
+                return;
+            }
             distributeWork(context);
+            log.info("work remaining {}", work.get());
+            if (isActive.get()) {
+                log.info("All workers have completed their work. Sending acknowledgment for Context ID: {}",
+                        context.getContextId());
+                sendAcknowledgment(context);
+
+                this.topology.setParentId(null);
+                log.info("Parent ID reset for worker {}", myId);
+
+                cleanup();
+            }
         } catch (Exception e) {
             log.error("Error processing work", e);
         }
-        offerHelp();
+        if (isActive.get() && context.getRootId().equals(myId))
+            offerHelp();
     }
 
     private void distributeWork(WorkContext context) throws RemoteException, NotBoundException {
-        log.info("Worker {} started distributing. Context ID: {}, Work Remaining: {}", myId, context.getContextId(), work.get());
 
-        if (work.get() <= 0) {
-            log.info("Worker {} has no work left to distribute. Sending acknowledgment for Context ID: {}", myId, context.getContextId());
-            sendAcknowledgment(context);
-            return;
-        }
 
         log.info("Worker {} fetching available workers.", myId);
         Map<String, Node> availableWorkers = new ConcurrentHashMap<>(topology.getNeighbors());
@@ -100,7 +119,7 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
             log.debug("Attempting to connect to worker {} at host: {}, port: {}", workerId, workerNode.getHost(), workerNode.getPort());
             try {
                 NodeInterface worker = getRemoteNodeImpl(workerNode.getHost(), workerNode.getPort());
-                if (worker.checkStatus() && worker.getParentId() == null) {
+                if (worker.checkStatus() && worker.getParentId() == null && !helperInvitations.containsKey(workerId)) {
                     log.info("Worker {} is available and has no parent. Assigning current worker {} as parent.", workerId, myId);
                     worker.updateParentId(getMyId());
                     remoteWorkers.put(workerId, worker);
@@ -142,12 +161,15 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
                         WorkContext workerContext = new WorkContext(context, context.getDepth() + 1);
                         log.debug("Sending work to worker {}. Context ID: {}, Parent ID: {}, Depth: {}",
                                 workerId, workerContext.getContextId(), myId, workerContext.getDepth());
-                        work.addAndGet(-workerShare);
-                        workerNode.receiveWork(workerShare, myId, workerContext);
+                        if (workerNode.checkStatus()){
+                            work.addAndGet(-workerShare);
+                            workerNode.receiveWork(workerShare, myId, workerContext);
+                        }
 
                     } catch (Exception e) {
-                        log.error("Failed to distribute work to worker {}. Reducing latch count for Context ID: {}",
-                                workerId, context.getContextId(), e);
+                        work.addAndGet(workerShare);
+                        log.info("Failed to distribute work to worker {}. Reducing latch count for Context ID: {}",
+                                workerId, context.getContextId());
                         phaser.arriveAndDeregister();
                     }
                 }, executorService);
@@ -158,27 +180,29 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
             }
         });
 
-//        // Wait for all distributions to complete
+        // Wait for all distributions to complete
 //        CompletableFuture.allOf(distributionFutures.toArray(new CompletableFuture[0])).join();
 
         log.info("Worker {} finished distributing. Remaining work: {}", myId, work.get());
 
-        doWork(context, distributionFutures, phaser);
+        doWork(context, phaser, baseWork);
 
         log.info("Worker {} completed its own work. Awaiting completion of distributed work for Context ID: {}",
                 myId, context.getContextId());
 
         try {
+
             if (numWorkers == 0) {
                 phaser.arriveAndDeregister();
             }
             phaser.awaitAdvance(phaser.getPhase());
-            log.info("All workers have completed their work. Sending acknowledgment for Context ID: {}",
-                    context.getContextId());
-            sendAcknowledgment(context);
-
-            this.topology.setParentId(null);
-            log.info("Parent ID reset for worker {}", myId);
+            if (!isActive.get()){
+                log.info("Node is not active anymore: {}", myId);
+                return;
+            }
+            if (this.work.get()>0) {
+                distributeWork(context);
+            }
 
         } catch (Exception e) {
             log.error("Worker {} interrupted while waiting for latch countdown. Context ID: {}",
@@ -188,15 +212,17 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
     }
 
 
-    private void doWork(WorkContext workContext, List<CompletableFuture<Void>> distributionFutures, Phaser phaser) throws NotBoundException, RemoteException {
+    private void doWork(WorkContext workContext, Phaser phaser, int baseWork) throws NotBoundException, RemoteException {
+        AtomicInteger workToDo=new AtomicInteger(baseWork);
         System.out.println("Worker " + myId + " started doing");
-        while (work.get() > 0) {
+        while (workToDo.get() > 0 && work.get()>0) {
             if (!isActive.get()) {
                 break;
             }
             if (!helperInvitations.isEmpty()){
-                receiveHelp(workContext, distributionFutures, phaser);
+                receiveHelp(workContext, phaser, workToDo);
             }
+            workToDo.decrementAndGet();
             work.decrementAndGet();
             try {
                 Thread.sleep(1000); // Simulate work
@@ -336,48 +362,83 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
         }
     }
 
-    public void receiveHelp(WorkContext context, List<CompletableFuture<Void>> distributionFutures, Phaser phaser) throws NotBoundException, RemoteException {
-        for (String helperId: helperInvitations.keySet()) {
-            Node helper = helperInvitations.get(helperId);
-            NodeInterface helperImpl = getRemoteNodeImpl(helper.getHost(), helper.getPort());
-            int workerShare = work.get() / 2;
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                try {
-                    log.info("Assigning {} units of work to helper {}. Remaining work before assignment: {}",
-                            work, helperId, work.get());
-                    pendingAcks.get(context.getContextId()).add(helperId);
+    public void receiveHelp(WorkContext context, Phaser phaser, AtomicInteger workToHelp) throws NotBoundException, RemoteException {
+        if (helperInvitations.isEmpty() || workToHelp.get() <= 0) {
+            return;
+        }
 
-                    WorkContext workerContext = new WorkContext(context, context.getDepth() + 1);
-                    log.debug("Sending work to helper {}. Context ID: {}, Parent ID: {}, Depth: {}",
-                            helperId, workerContext.getContextId(), myId, workerContext.getDepth());
+        phaser.bulkRegister(helperInvitations.size());
 
-                    helperImpl.receiveWork(workerShare, myId, workerContext);
-                    work.addAndGet(-workerShare);
-                    log.info("Work successfully sent to helper {}. Remaining work after assignment: {}",
-                            helperId, work.get());
-                } catch (Exception e) {
-                    log.error("Failed to distribute work to worker {}. Reducing latch count for Context ID: {}",
-                            helperId, context.getContextId(), e);
+        // Calculate work share without the +1 to prevent overflow
+        int totalWorkToShare = workToHelp.get();
+        int numHelpers = helperInvitations.size();
+        int baseShare = totalWorkToShare / (numHelpers + 1); // Reserve some work for self
+        int extraWork = totalWorkToShare % (numHelpers + 1);
+
+        Map<String, Node> currentHelpers = new HashMap<>(helperInvitations);
+        helperInvitations.clear(); // Clear immediately to prevent double allocation
+
+        for (Map.Entry<String, Node> entry : currentHelpers.entrySet()) {
+            String helperId = entry.getKey();
+            Node helper = entry.getValue();
+
+            try {
+                NodeInterface helperImpl = getRemoteNodeImpl(helper.getHost(), helper.getPort());
+
+                if (helperImpl.getParentId() == null && helperImpl.checkStatus()) {
+                    // Calculate this helper's share
+                    int workerShare = baseShare + (extraWork > 0 ? 1 : 0);
+                    extraWork--;
+
+                    if (workerShare <= 0) {
+                        phaser.arriveAndDeregister();
+                        continue;
+                    }
+
+                    // Atomically update work counts
+                    if (work.addAndGet(-workerShare) < 0 || workToHelp.addAndGet(-workerShare) < 0) {
+                        // Rollback if we went negative
+                        work.addAndGet(workerShare);
+                        workToHelp.addAndGet(workerShare);
+                        phaser.arriveAndDeregister();
+                        continue;
+                    }
+
+                    CompletableFuture.runAsync(() -> {
+                        try {
+                            log.info("Assigning {} units of work to helper {}. Remaining work before assignment: {}",
+                                    workerShare, helperId, work.get());
+                            pendingAcks.get(context.getContextId()).add(helperId);
+
+                            WorkContext workerContext = new WorkContext(context, context.getDepth() + 1);
+                            helperImpl.receiveWork(workerShare, myId, workerContext);
+
+                            log.info("Work successfully sent to helper {}. Remaining work after assignment: {}",
+                                    helperId, work.get());
+                        } catch (Exception e) {
+                            work.addAndGet(workerShare);
+                            workToHelp.addAndGet(workerShare);
+                            log.error("Failed to distribute work to helper {}", helperId, e);
+                            phaser.arriveAndDeregister();
+                        }
+                    }, executorService);
+                } else {
                     phaser.arriveAndDeregister();
                 }
-            }, executorService);
-            work.getAndUpdate(currentWork -> currentWork - workerShare);
-            distributionFutures.add(future);
-            helperInvitations.remove(helperId);
+            } catch (Exception e) {
+                log.error("Failed to connect to helper {}", helperId, e);
+                phaser.arriveAndDeregister();
+            }
         }
-        // Wait for all distributions to complete
-        CompletableFuture.allOf(distributionFutures.toArray(new CompletableFuture[0])).join();
-
     }
-
-    public String kill() {
+    public String kill() throws RemoteException, NotBoundException {
+        log.info("Node {} initiating shutdown sequence", myId);
         isActive.set(false);
+        log.info("Node {} deactivated, triggering failure handling", myId);
+        if(workContext!=null)
+            failure();
+        log.info("Node {} successfully killed", myId);
         return myId + " is killed";
-    }
-
-    public String revive() {
-        isActive.set(true);
-        return myId + " is revived";
     }
 
     public String setDelay(int newDelay) {
@@ -434,5 +495,98 @@ public class NodeImpl extends UnicastRemoteObject implements NodeInterface {
             }
         }
         if (max>4) biggestNode.addToInvitation(getMyId(), getMyNode());
+    }
+
+    public void failure() throws RemoteException, NotBoundException {
+        if(getParentId()!=null) {
+            log.info("Node {} handling failure - preparing to redistribute work", myId);
+            Node parent = this.topology.getNeighbor(getParentId());
+            NodeInterface parentImpl = getRemoteNodeImpl(parent.getHost(), parent.getPort());
+
+            log.info("Node {} notifying parent {} about failure. Returning {} units of work",
+                    myId, getParentId(), copyOfWork.get());
+            parentImpl.receiveChildFailure(myId, copyOfWork.get(), this.workContext);
+        }
+
+        log.info("Node {} cascading failure notification to children", myId);
+        sendParentFailure();
+    }
+    public void receiveChildFailure(String failedNodeId, int givenWork, WorkContext context) throws RemoteException {
+        log.info("Node {} receiving failure notification from child {}. Taking over {} units of work",
+                myId, failedNodeId, givenWork);
+        receiveAcknowledgment(failedNodeId, context.getContextId());
+        this.work.addAndGet(givenWork);
+        this.copyOfWork.addAndGet(givenWork);
+        log.info("Node {} successfully absorbed work from failed child {}, new work is {}", myId, failedNodeId, this.work.get());
+    }
+
+    public void sendParentFailure() throws RemoteException {
+        log.info("Node {} initiating parent failure protocol", myId);
+        updateParentId(null);
+        work.set(0);
+        Phaser phaser = this.completionLatches.get(this.workContext.getContextId());
+        log.info("Node {} clearing {} pending help invitations", myId, helperInvitations.size());
+        helperInvitations.clear();
+
+        log.info("Node {} disconnecting from parent", myId);
+
+        log.info("Node {} notifying {} child workers about failure", myId, remoteWorkers.size());
+        for (Map.Entry<String, NodeInterface> workerMap : remoteWorkers.entrySet()) {
+            NodeInterface worker = workerMap.getValue();
+            executorService.submit(() -> {
+                try {
+                    worker.sendParentFailure();
+                    phaser.arriveAndDeregister();
+                    log.debug("Node {} successfully notified child worker about failure", myId);
+                } catch (RemoteException e) {
+                    log.error("Node {} failed to notify worker about failure: {}", myId, e.getMessage());
+                }
+            });
+        }
+        log.info("Node {} completed parent failure protocol", myId);
+    }
+
+    public String revive() throws RemoteException, NotBoundException {
+        log.info("Node {} initiating revival sequence", myId);
+        isActive.set(true);
+        cleanup();
+        log.info("Node {} reactivated, checking for nodes that need help", myId);
+        offerHelp();
+
+        log.info("Node {} successfully revived and ready for work", myId);
+        return myId + " is revived";
+    }
+    private void cleanup() {
+        completionLatches.clear();
+        activeContexts.clear();
+        pendingAcks.clear();
+        helperInvitations.clear();
+        remoteWorkers.clear();
+
+        // Properly shutdown the executor service
+        try {
+            // Initiate an orderly shutdown
+            executorService.shutdown();
+
+            // Wait for tasks to complete or timeout
+            if (!executorService.awaitTermination(30, TimeUnit.SECONDS)) {
+                // Force shutdown if tasks don't complete in time
+                executorService.shutdownNow();
+            }
+
+            // Create new executor service after cleanup
+            executorService = createNewExecutorService();
+
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+            // Still create new executor service even if interrupted
+            executorService = createNewExecutorService();
+        }
+    }
+    private synchronized ExecutorService createNewExecutorService() {
+        return Executors.newFixedThreadPool(
+                Runtime.getRuntime().availableProcessors() * 2
+        );
     }
 }

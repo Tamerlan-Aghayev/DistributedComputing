@@ -25,11 +25,11 @@ public class NodeController {
         return ResponseEntity.ok(nodeImpl.leaveTopology());
     }
     @PostMapping("/kill")
-    public ResponseEntity<String> kill(){
+    public ResponseEntity<String> kill() throws NotBoundException, RemoteException {
         return ResponseEntity.ok(nodeImpl.kill());
     }
     @PostMapping("/revive")
-    public ResponseEntity<String> revive(){
+    public ResponseEntity<String> revive() throws NotBoundException, RemoteException {
         return ResponseEntity.ok(nodeImpl.revive());
     }
     @PostMapping("/setDelay/{delay}")
@@ -38,8 +38,13 @@ public class NodeController {
     }
 
     @PostMapping("/startWork/{work}")
-    public void startWork(@PathVariable("work") int work) throws RemoteException, NotBoundException {
+    public ResponseEntity<String> startWork(@PathVariable("work") int work) throws RemoteException, NotBoundException {
+        long startTime = System.nanoTime();
         nodeImpl.receiveWork(work, null, new WorkContext(nodeImpl.getMyId(), work));
+        long endTime = System.nanoTime();
+        long latencyInMillis = (endTime - startTime) / 1_000_000_000;
+
+        return ResponseEntity.ok("Time to finish the process: "+ latencyInMillis+ " second(s)");
     }
 
     @GetMapping("/neighbors")
