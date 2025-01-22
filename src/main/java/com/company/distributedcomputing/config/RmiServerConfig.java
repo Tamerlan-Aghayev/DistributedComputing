@@ -1,5 +1,6 @@
-package com.company.distributedcomputing;
+package com.company.distributedcomputing.config;
 
+import com.company.distributedcomputing.service.impl.NodeImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -7,7 +8,6 @@ import org.springframework.context.annotation.Configuration;
 
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
-import java.rmi.server.UnicastRemoteObject;
 import java.util.Arrays;
 
 @Configuration

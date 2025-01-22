@@ -1,4 +1,4 @@
-package com.company.distributedcomputing;
+package com.company.distributedcomputing.model;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;

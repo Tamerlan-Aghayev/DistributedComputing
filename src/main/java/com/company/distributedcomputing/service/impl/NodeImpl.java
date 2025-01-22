@@ -1,5 +1,9 @@
-package com.company.distributedcomputing;
+package com.company.distributedcomputing.service.impl;
 
+import com.company.distributedcomputing.service.NodeInterface;
+import com.company.distributedcomputing.model.Node;
+import com.company.distributedcomputing.model.Topology;
+import com.company.distributedcomputing.model.WorkContext;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;

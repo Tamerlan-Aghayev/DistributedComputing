@@ -1,4 +1,7 @@
-package com.company.distributedcomputing;
+package com.company.distributedcomputing.service;
+
+import com.company.distributedcomputing.model.Node;
+import com.company.distributedcomputing.model.WorkContext;
 
 import java.rmi.NotBoundException;
 import java.rmi.Remote;

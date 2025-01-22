@@ -1,4 +1,4 @@
-package com.company.distributedcomputing;
+package com.company.distributedcomputing.model;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
